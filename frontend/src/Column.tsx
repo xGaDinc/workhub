@@ -7,11 +7,11 @@ import { Task, Status } from './types';
 interface ColumnProps {
   status: Status;
   tasks: Task[];
-  onDelete: (id: number) => void;
+  onDelete: (id: string) => void;
   onEdit: (task: Task) => void;
   onView: (task: Task) => void;
   onEditColumn: (column: Status) => void;
-  onDeleteColumn: (id: number) => void;
+  onDeleteColumn: (id: string) => void;
   canManage: boolean;
   isDragging?: boolean;
 }

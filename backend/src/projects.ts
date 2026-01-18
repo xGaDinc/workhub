@@ -1,7 +1,8 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
-import db, { saveDb, rowsToObjects } from './db.js';
+import { Project, ProjectMember, Status, Task, Permission, User } from './db.js';
 import { authMiddleware, AuthRequest, loadProjectMember, requireProjectRole } from './middleware.js';
+import mongoose from 'mongoose';
 
 const router = express.Router();
 
@@ -11,45 +12,175 @@ router.use(authMiddleware);
 // ПОЛУЧИТЬ ВСЕ ПРОЕКТЫ ПОЛЬЗОВАТЕЛЯ
 // ============================================
 
-router.get('/', (req: AuthRequest, res) => {
+router.get('/', async (req: AuthRequest, res) => {
   const userId = req.user!.id;
   const isAdmin = req.user!.is_admin;
 
-  let result;
-  if (isAdmin) {
-    // Глобальный админ видит все проекты
-    result = db.exec(`
-      SELECT p.*, u.name as creator_name,
-        COALESCE(pm.role, 'admin') as my_role,
-        (SELECT COUNT(*) FROM project_members WHERE project_id = p.id) as members_count,
-        (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as tasks_count
-      FROM projects p
-      LEFT JOIN users u ON p.created_by = u.id
-      LEFT JOIN project_members pm ON p.id = pm.project_id AND pm.user_id = ?
-      ORDER BY p.created_at DESC
-    `, [userId]);
-  } else {
-    // Обычный пользователь видит только свои проекты
-    result = db.exec(`
-      SELECT p.*, u.name as creator_name, pm.role as my_role,
-        (SELECT COUNT(*) FROM project_members WHERE project_id = p.id) as members_count,
-        (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as tasks_count
-      FROM projects p
-      INNER JOIN project_members pm ON p.id = pm.project_id AND pm.user_id = ?
-      LEFT JOIN users u ON p.created_by = u.id
-      ORDER BY p.created_at DESC
-    `, [userId]);
-  }
+  try {
+    let projects;
+    
+    if (isAdmin) {
+      // Глобальный админ видит все проекты
+      projects = await Project.aggregate([
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'created_by',
+            foreignField: '_id',
+            as: 'creator'
+          }
+        },
+        { $unwind: '$creator' },
+        {
+          $lookup: {
+            from: 'projectmembers',
+            let: { projectId: '$_id' },
+            pipeline: [
+              { $match: { $expr: { $eq: ['$project_id', '$$projectId'] } } },
+              { $count: 'count' }
+            ],
+            as: 'members'
+          }
+        },
+        {
+          $lookup: {
+            from: 'tasks',
+            let: { projectId: '$_id' },
+            pipeline: [
+              { $match: { $expr: { $eq: ['$project_id', '$$projectId'] } } },
+              { $count: 'count' }
+            ],
+            as: 'tasks'
+          }
+        },
+        {
+          $lookup: {
+            from: 'projectmembers',
+            let: { projectId: '$_id' },
+            pipeline: [
+              { 
+                $match: { 
+                  $expr: { 
+                    $and: [
+                      { $eq: ['$project_id', '$$projectId'] },
+                      { $eq: ['$user_id', new mongoose.Types.ObjectId(userId)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'my_membership'
+          }
+        },
+        {
+          $project: {
+            id: '$_id',
+            name: 1,
+            description: 1,
+            created_by: 1,
+            creator_name: '$creator.name',
+            created_at: 1,
+            my_role: { 
+              $ifNull: [
+                { $arrayElemAt: ['$my_membership.role', 0] },
+                'admin'
+              ]
+            },
+            members_count: { $ifNull: [{ $arrayElemAt: ['$members.count', 0] }, 0] },
+            tasks_count: { $ifNull: [{ $arrayElemAt: ['$tasks.count', 0] }, 0] }
+          }
+        },
+        { $sort: { created_at: -1 } }
+      ]);
+    } else {
+      // Обычный пользователь видит только свои проекты
+      const memberships = await ProjectMember.find({ 
+        user_id: new mongoose.Types.ObjectId(userId) 
+      });
+      
+      const projectIds = memberships.map(m => m.project_id);
+      
+      projects = await Project.aggregate([
+        { $match: { _id: { $in: projectIds } } },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'created_by',
+            foreignField: '_id',
+            as: 'creator'
+          }
+        },
+        { $unwind: '$creator' },
+        {
+          $lookup: {
+            from: 'projectmembers',
+            let: { projectId: '$_id' },
+            pipeline: [
+              { $match: { $expr: { $eq: ['$project_id', '$$projectId'] } } },
+              { $count: 'count' }
+            ],
+            as: 'members'
+          }
+        },
+        {
+          $lookup: {
+            from: 'tasks',
+            let: { projectId: '$_id' },
+            pipeline: [
+              { $match: { $expr: { $eq: ['$project_id', '$$projectId'] } } },
+              { $count: 'count' }
+            ],
+            as: 'tasks'
+          }
+        },
+        {
+          $lookup: {
+            from: 'projectmembers',
+            let: { projectId: '$_id' },
+            pipeline: [
+              { 
+                $match: { 
+                  $expr: { 
+                    $and: [
+                      { $eq: ['$project_id', '$$projectId'] },
+                      { $eq: ['$user_id', new mongoose.Types.ObjectId(userId)] }
+                    ]
+                  }
+                }
+              }
+            ],
+            as: 'my_membership'
+          }
+        },
+        {
+          $project: {
+            id: '$_id',
+            name: 1,
+            description: 1,
+            created_by: 1,
+            creator_name: '$creator.name',
+            created_at: 1,
+            my_role: { $arrayElemAt: ['$my_membership.role', 0] },
+            members_count: { $ifNull: [{ $arrayElemAt: ['$members.count', 0] }, 0] },
+            tasks_count: { $ifNull: [{ $arrayElemAt: ['$tasks.count', 0] }, 0] }
+          }
+        },
+        { $sort: { created_at: -1 } }
+      ]);
+    }
 
-  const projects = rowsToObjects(result);
-  res.json(projects);
+    res.json(projects);
+  } catch (error) {
+    console.error('Get projects error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 // ============================================
 // СОЗДАТЬ ПРОЕКТ
 // ============================================
 
-router.post('/', (req: AuthRequest, res) => {
+router.post('/', async (req: AuthRequest, res) => {
   const { name, description } = req.body;
   const userId = req.user!.id;
 
@@ -59,19 +190,18 @@ router.post('/', (req: AuthRequest, res) => {
 
   try {
     // Создаём проект
-    db.run(
-      'INSERT INTO projects (name, description, created_by) VALUES (?, ?, ?)',
-      [name, description || null, userId]
-    );
-    
-    const projectResult = db.exec('SELECT last_insert_rowid() as id')[0];
-    const projectId = projectResult.values[0][0] as number;
+    const project = await Project.create({
+      name,
+      description: description || null,
+      created_by: new mongoose.Types.ObjectId(userId)
+    });
 
     // Добавляем создателя как owner
-    db.run(
-      'INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, ?)',
-      [projectId, userId, 'owner']
-    );
+    await ProjectMember.create({
+      project_id: project._id,
+      user_id: new mongoose.Types.ObjectId(userId),
+      role: 'owner'
+    });
 
     // Создаём дефолтные статусы
     const defaultStatuses = [
@@ -80,592 +210,402 @@ router.post('/', (req: AuthRequest, res) => {
       { slug: 'done', title: 'Done', color: 'from-green-700 to-green-800', icon: '✓', position: 2 },
     ];
 
-    defaultStatuses.forEach(status => {
-      db.run(
-        'INSERT INTO statuses (project_id, slug, title, color, icon, position) VALUES (?, ?, ?, ?, ?, ?)',
-        [projectId, status.slug, status.title, status.color, status.icon, status.position]
-      );
-    });
-
-    saveDb();
+    await Promise.all(defaultStatuses.map(status => 
+      Status.create({
+        project_id: project._id,
+        slug: status.slug,
+        title: status.title,
+        color: status.color,
+        icon: status.icon,
+        position: status.position
+      })
+    ));
 
     res.status(201).json({
-      id: projectId,
-      name,
-      description,
-      created_by: userId,
+      id: project._id,
+      name: project.name,
+      description: project.description,
+      created_by: project.created_by,
       my_role: 'owner'
     });
   } catch (error) {
     console.error('Create project error:', error);
-    res.status(500).json({ error: 'Failed to create project' });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
 // ============================================
-// ПОЛУЧИТЬ ПРОЕКТ ПО ID
+// ПОЛУЧИТЬ ПРОЕКТ
 // ============================================
 
-router.get('/:projectId', loadProjectMember, (req: AuthRequest, res) => {
-  const { projectId } = req.params;
+router.get('/:id', loadProjectMember, async (req: AuthRequest, res) => {
+  const { id } = req.params;
 
-  const result = db.exec(`
-    SELECT p.*, u.name as creator_name
-    FROM projects p
-    LEFT JOIN users u ON p.created_by = u.id
-    WHERE p.id = ?
-  `, [projectId]);
+  try {
+    const project = await Project.findById(id).populate('created_by', 'name email');
+    
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
 
-  const project = rowsToObjects(result)[0];
-  
-  if (!project) {
-    return res.status(404).json({ error: 'Project not found' });
+    const creator = project.created_by as any;
+    
+    res.json({
+      id: project._id,
+      name: project.name,
+      description: project.description,
+      created_by: project.created_by,
+      creator_name: creator.name,
+      created_at: project.created_at,
+      my_role: req.projectMember!.role
+    });
+  } catch (error) {
+    console.error('Get project error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
-
-  res.json({
-    ...project,
-    my_role: req.projectMember!.role
-  });
 });
 
 // ============================================
 // ОБНОВИТЬ ПРОЕКТ
 // ============================================
 
-router.patch('/:projectId', loadProjectMember, requireProjectRole('owner', 'admin'), (req: AuthRequest, res) => {
-  const { projectId } = req.params;
+router.patch('/:id', loadProjectMember, requireProjectRole('owner', 'admin'), async (req: AuthRequest, res) => {
+  const { id } = req.params;
   const { name, description } = req.body;
 
-  const updates: string[] = [];
-  const values: any[] = [];
+  try {
+    const updateData: any = {};
+    if (name !== undefined) updateData.name = name;
+    if (description !== undefined) updateData.description = description;
 
-  if (name !== undefined) {
-    updates.push('name = ?');
-    values.push(name);
+    const project = await Project.findByIdAndUpdate(id, updateData, { new: true });
+    
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    res.json({
+      id: project._id,
+      name: project.name,
+      description: project.description,
+      created_by: project.created_by
+    });
+  } catch (error) {
+    console.error('Update project error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
-  if (description !== undefined) {
-    updates.push('description = ?');
-    values.push(description);
-  }
-
-  if (updates.length === 0) {
-    return res.status(400).json({ error: 'No fields to update' });
-  }
-
-  values.push(projectId);
-  db.run(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`, values);
-  saveDb();
-
-  const result = db.exec('SELECT * FROM projects WHERE id = ?', [projectId]);
-  const project = rowsToObjects(result)[0];
-  res.json(project);
 });
 
 // ============================================
 // УДАЛИТЬ ПРОЕКТ
 // ============================================
 
-router.delete('/:projectId', loadProjectMember, requireProjectRole('owner'), (req: AuthRequest, res) => {
-  const { projectId } = req.params;
+router.delete('/:id', loadProjectMember, requireProjectRole('owner'), async (req: AuthRequest, res) => {
+  const { id } = req.params;
 
-  db.run('DELETE FROM projects WHERE id = ?', [projectId]);
-  saveDb();
+  try {
+    await Project.findByIdAndDelete(id);
+    // Mongoose автоматически удалит связанные документы благодаря каскадному удалению
+    await ProjectMember.deleteMany({ project_id: new mongoose.Types.ObjectId(id) });
+    await Status.deleteMany({ project_id: new mongoose.Types.ObjectId(id) });
+    await Task.deleteMany({ project_id: new mongoose.Types.ObjectId(id) });
 
-  res.status(204).send();
+    res.json({ message: 'Project deleted' });
+  } catch (error) {
+    console.error('Delete project error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 // ============================================
-// УЧАСТНИКИ ПРОЕКТА
+// ПОЛУЧИТЬ УЧАСТНИКОВ ПРОЕКТА
 // ============================================
 
-// Получить всех участников
-router.get('/:projectId/members', loadProjectMember, (req: AuthRequest, res) => {
-  const { projectId } = req.params;
+router.get('/:id/members', loadProjectMember, async (req: AuthRequest, res) => {
+  const { id } = req.params;
 
-  const result = db.exec(`
-    SELECT pm.*, u.email, u.name
-    FROM project_members pm
-    INNER JOIN users u ON pm.user_id = u.id
-    WHERE pm.project_id = ?
-    ORDER BY pm.role, u.name
-  `, [projectId]);
+  try {
+    const members = await ProjectMember.find({ 
+      project_id: new mongoose.Types.ObjectId(id) 
+    }).populate('user_id', 'name email').sort({ created_at: 1 });
 
-  const members = rowsToObjects(result);
-  res.json(members);
+    const result = members.map(m => {
+      const user = m.user_id as any;
+      return {
+        id: m._id,
+        project_id: m.project_id,
+        user_id: user._id,
+        role: m.role,
+        email: user.email,
+        name: user.name,
+        created_at: m.created_at
+      };
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('Get members error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
-// Добавить участника
-router.post('/:projectId/members', loadProjectMember, requireProjectRole('owner', 'admin'), (req: AuthRequest, res) => {
-  const { projectId } = req.params;
-  const { user_id, role = 'member' } = req.body;
+// ============================================
+// ДОБАВИТЬ УЧАСТНИКА
+// ============================================
+
+router.post('/:id/members', loadProjectMember, requireProjectRole('owner', 'admin'), async (req: AuthRequest, res) => {
+  const { id } = req.params;
+  const { user_id, role } = req.body;
 
   if (!user_id) {
-    return res.status(400).json({ error: 'User ID is required' });
-  }
-
-  // Проверяем, что роль валидна
-  const validRoles = ['admin', 'member', 'viewer'];
-  if (!validRoles.includes(role)) {
-    return res.status(400).json({ error: 'Invalid role' });
-  }
-
-  // Нельзя добавить owner (только создатель проекта)
-  if (role === 'owner') {
-    return res.status(400).json({ error: 'Cannot assign owner role' });
+    return res.status(400).json({ error: 'user_id is required' });
   }
 
   try {
-    db.run(
-      'INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, ?)',
-      [projectId, user_id, role]
-    );
-    
-    const memberResult = db.exec('SELECT last_insert_rowid() as id')[0];
-    const memberId = memberResult.values[0][0] as number;
+    const member = await ProjectMember.create({
+      project_id: new mongoose.Types.ObjectId(id),
+      user_id: new mongoose.Types.ObjectId(user_id),
+      role: role || 'member'
+    });
 
-    // Для viewer создаём права только на чтение для всех статусов
-    if (role === 'viewer') {
-      db.run(
-        'INSERT INTO permissions (project_member_id, status_id, can_read, can_create, can_edit, can_delete) VALUES (?, NULL, 1, 0, 0, 0)',
-        [memberId]
-      );
-    }
-    // Для member создаём базовые права
-    else if (role === 'member') {
-      db.run(
-        'INSERT INTO permissions (project_member_id, status_id, can_read, can_create, can_edit, can_delete) VALUES (?, NULL, 1, 1, 1, 0)',
-        [memberId]
-      );
-    }
+    const populated = await ProjectMember.findById(member._id).populate('user_id', 'name email');
+    const user = populated!.user_id as any;
 
-    saveDb();
-
-    const result = db.exec(`
-      SELECT pm.*, u.email, u.name
-      FROM project_members pm
-      INNER JOIN users u ON pm.user_id = u.id
-      WHERE pm.id = ?
-    `, [memberId]);
-
-    res.status(201).json(rowsToObjects(result)[0]);
+    res.status(201).json({
+      id: populated!._id,
+      project_id: populated!.project_id,
+      user_id: user._id,
+      role: populated!.role,
+      email: user.email,
+      name: user.name,
+      created_at: populated!.created_at
+    });
   } catch (error: any) {
-    if (error.message?.includes('UNIQUE')) {
+    if (error.code === 11000) {
       return res.status(400).json({ error: 'User is already a member' });
     }
     console.error('Add member error:', error);
-    res.status(500).json({ error: 'Failed to add member' });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Создать пользователя и добавить в проект
-router.post('/:projectId/members/create', loadProjectMember, requireProjectRole('owner', 'admin'), async (req: AuthRequest, res) => {
-  const { projectId } = req.params;
-  const { email, name, password, role = 'member' } = req.body;
+// ============================================
+// СОЗДАТЬ И ДОБАВИТЬ УЧАСТНИКА
+// ============================================
+
+router.post('/:id/members/create', loadProjectMember, requireProjectRole('owner', 'admin'), async (req: AuthRequest, res) => {
+  const { id } = req.params;
+  const { email, name, password, role } = req.body;
 
   if (!email || !name || !password) {
     return res.status(400).json({ error: 'Email, name and password are required' });
   }
 
-  // Проверяем, что роль валидна
-  const validRoles = ['admin', 'member', 'viewer'];
-  if (!validRoles.includes(role)) {
-    return res.status(400).json({ error: 'Invalid role' });
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    const user = await User.create({
+      email,
+      name,
+      password: hashedPassword,
+      is_admin: false
+    });
+
+    const member = await ProjectMember.create({
+      project_id: new mongoose.Types.ObjectId(id),
+      user_id: user._id,
+      role: role || 'member'
+    });
+
+    res.status(201).json({
+      id: member._id,
+      project_id: member.project_id,
+      user_id: user._id,
+      role: member.role,
+      email: user.email,
+      name: user.name,
+      created_at: member.created_at
+    });
+  } catch (error: any) {
+    if (error.code === 11000) {
+      return res.status(400).json({ error: 'Email already exists' });
+    }
+    console.error('Create and add member error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ============================================
+// ИЗМЕНИТЬ РОЛЬ УЧАСТНИКА
+// ============================================
+
+router.patch('/:id/members/:memberId', loadProjectMember, requireProjectRole('owner', 'admin'), async (req: AuthRequest, res) => {
+  const { id, memberId } = req.params;
+  const { role } = req.body;
+
+  if (!role) {
+    return res.status(400).json({ error: 'Role is required' });
   }
 
   try {
-    // Проверяем, существует ли пользователь с таким email
-    const existingUser = db.exec('SELECT id FROM users WHERE email = ?', [email]);
-    let userId: number;
-
-    if (rowsToObjects(existingUser).length > 0) {
-      // Пользователь уже существует — просто добавим в проект
-      userId = rowsToObjects(existingUser)[0].id;
-      
-      // Проверяем, не является ли уже участником
-      const existingMember = db.exec(
-        'SELECT id FROM project_members WHERE project_id = ? AND user_id = ?',
-        [projectId, userId]
-      );
-      if (rowsToObjects(existingMember).length > 0) {
-        return res.status(400).json({ error: 'Пользователь уже в проекте' });
-      }
-    } else {
-      // Создаём нового пользователя
-      const hashedPassword = await bcrypt.hash(password, 10);
-      db.run(
-        'INSERT INTO users (email, password, name) VALUES (?, ?, ?)',
-        [email, hashedPassword, name]
-      );
-      const userResult = db.exec('SELECT last_insert_rowid() as id')[0];
-      userId = userResult.values[0][0] as number;
-    }
-
-    // Добавляем в проект
-    db.run(
-      'INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, ?)',
-      [projectId, userId, role]
-    );
+    const member = await ProjectMember.findById(memberId);
     
-    const memberResult = db.exec('SELECT last_insert_rowid() as id')[0];
-    const memberId = memberResult.values[0][0] as number;
-
-    // Создаём права в зависимости от роли
-    if (role === 'viewer') {
-      db.run(
-        'INSERT INTO permissions (project_member_id, status_id, can_read, can_create, can_edit, can_delete) VALUES (?, NULL, 1, 0, 0, 0)',
-        [memberId]
-      );
-    } else if (role === 'member') {
-      db.run(
-        'INSERT INTO permissions (project_member_id, status_id, can_read, can_create, can_edit, can_delete) VALUES (?, NULL, 1, 1, 1, 0)',
-        [memberId]
-      );
+    if (!member || member.project_id.toString() !== id) {
+      return res.status(404).json({ error: 'Member not found' });
     }
 
-    saveDb();
+    if (member.role === 'owner' && req.projectMember!.role !== 'owner') {
+      return res.status(403).json({ error: 'Only owner can change owner role' });
+    }
 
-    const result = db.exec(`
-      SELECT pm.*, u.email, u.name
-      FROM project_members pm
-      INNER JOIN users u ON pm.user_id = u.id
-      WHERE pm.id = ?
-    `, [memberId]);
+    member.role = role;
+    await member.save();
 
-    res.status(201).json(rowsToObjects(result)[0]);
-  } catch (error: any) {
-    console.error('Create member error:', error);
-    res.status(500).json({ error: 'Failed to create member' });
+    const populated = await ProjectMember.findById(memberId).populate('user_id', 'name email');
+    const user = populated!.user_id as any;
+
+    res.json({
+      id: populated!._id,
+      project_id: populated!.project_id,
+      user_id: user._id,
+      role: populated!.role,
+      email: user.email,
+      name: user.name
+    });
+  } catch (error) {
+    console.error('Update member error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
-});
-
-// Обновить роль участника
-router.patch('/:projectId/members/:memberId', loadProjectMember, requireProjectRole('owner', 'admin'), (req: AuthRequest, res) => {
-  const { projectId, memberId } = req.params;
-  const { role } = req.body;
-
-  // Проверяем, что участник существует
-  const memberResult = db.exec(
-    'SELECT * FROM project_members WHERE id = ? AND project_id = ?',
-    [memberId, projectId]
-  );
-  const member = rowsToObjects(memberResult)[0];
-
-  if (!member) {
-    return res.status(404).json({ error: 'Member not found' });
-  }
-
-  // Нельзя изменить роль owner
-  if (member.role === 'owner') {
-    return res.status(400).json({ error: 'Cannot change owner role' });
-  }
-
-  // Нельзя назначить owner
-  if (role === 'owner') {
-    return res.status(400).json({ error: 'Cannot assign owner role' });
-  }
-
-  // Admin не может менять роль другого admin
-  if (req.projectMember!.role === 'admin' && member.role === 'admin') {
-    return res.status(403).json({ error: 'Admin cannot change another admin role' });
-  }
-
-  const validRoles = ['admin', 'member', 'viewer'];
-  if (!validRoles.includes(role)) {
-    return res.status(400).json({ error: 'Invalid role' });
-  }
-
-  db.run('UPDATE project_members SET role = ? WHERE id = ?', [role, memberId]);
-  
-  // Обновляем права в зависимости от роли
-  db.run('DELETE FROM permissions WHERE project_member_id = ?', [memberId]);
-  
-  if (role === 'viewer') {
-    db.run(
-      'INSERT INTO permissions (project_member_id, status_id, can_read, can_create, can_edit, can_delete) VALUES (?, NULL, 1, 0, 0, 0)',
-      [memberId]
-    );
-  } else if (role === 'member') {
-    db.run(
-      'INSERT INTO permissions (project_member_id, status_id, can_read, can_create, can_edit, can_delete) VALUES (?, NULL, 1, 1, 1, 0)',
-      [memberId]
-    );
-  }
-  
-  saveDb();
-
-  const result = db.exec(`
-    SELECT pm.*, u.email, u.name
-    FROM project_members pm
-    INNER JOIN users u ON pm.user_id = u.id
-    WHERE pm.id = ?
-  `, [memberId]);
-
-  res.json(rowsToObjects(result)[0]);
-});
-
-// Удалить участника
-router.delete('/:projectId/members/:memberId', loadProjectMember, requireProjectRole('owner', 'admin'), (req: AuthRequest, res) => {
-  const { projectId, memberId } = req.params;
-
-  // Проверяем, что участник существует
-  const memberResult = db.exec(
-    'SELECT * FROM project_members WHERE id = ? AND project_id = ?',
-    [memberId, projectId]
-  );
-  const member = rowsToObjects(memberResult)[0];
-
-  if (!member) {
-    return res.status(404).json({ error: 'Member not found' });
-  }
-
-  // Нельзя удалить owner
-  if (member.role === 'owner') {
-    return res.status(400).json({ error: 'Cannot remove project owner' });
-  }
-
-  // Admin не может удалить другого admin
-  if (req.projectMember!.role === 'admin' && member.role === 'admin') {
-    return res.status(403).json({ error: 'Admin cannot remove another admin' });
-  }
-
-  db.run('DELETE FROM project_members WHERE id = ?', [memberId]);
-  saveDb();
-
-  res.status(204).send();
 });
 
 // ============================================
-// ПРАВА УЧАСТНИКА
+// УДАЛИТЬ УЧАСТНИКА
 // ============================================
 
-// Получить права участника
-router.get('/:projectId/members/:memberId/permissions', loadProjectMember, requireProjectRole('owner', 'admin'), (req: AuthRequest, res) => {
+router.delete('/:id/members/:memberId', loadProjectMember, requireProjectRole('owner', 'admin'), async (req: AuthRequest, res) => {
+  const { id, memberId } = req.params;
+
+  try {
+    const member = await ProjectMember.findById(memberId);
+    
+    if (!member || member.project_id.toString() !== id) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
+
+    if (member.role === 'owner') {
+      return res.status(400).json({ error: 'Cannot remove project owner' });
+    }
+
+    await ProjectMember.findByIdAndDelete(memberId);
+    await Permission.deleteMany({ project_member_id: new mongoose.Types.ObjectId(memberId) });
+
+    res.json({ message: 'Member removed' });
+  } catch (error) {
+    console.error('Remove member error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ============================================
+// ПОЛУЧИТЬ ПРАВА УЧАСТНИКА
+// ============================================
+
+router.get('/:id/members/:memberId/permissions', loadProjectMember, async (req: AuthRequest, res) => {
   const { memberId } = req.params;
 
-  const result = db.exec(`
-    SELECT p.*, s.title as status_title, s.slug as status_slug
-    FROM permissions p
-    LEFT JOIN statuses s ON p.status_id = s.id
-    WHERE p.project_member_id = ?
-  `, [memberId]);
+  try {
+    const member = await ProjectMember.findById(memberId);
+    
+    if (!member) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
 
-  const permissions = rowsToObjects(result);
-  res.json(permissions);
+    if (member.role === 'owner' || member.role === 'admin') {
+      return res.json({ role: member.role, permissions: [] });
+    }
+
+    const permissions = await Permission.find({ 
+      project_member_id: new mongoose.Types.ObjectId(memberId) 
+    }).populate('status_id', 'title slug');
+
+    const result = permissions.map(p => {
+      const status = p.status_id as any;
+      return {
+        id: p._id,
+        project_member_id: p.project_member_id,
+        status_id: p.status_id,
+        status_title: status?.title,
+        status_slug: status?.slug,
+        can_read: p.can_read,
+        can_create: p.can_create,
+        can_edit: p.can_edit,
+        can_delete: p.can_delete
+      };
+    });
+
+    res.json({ role: member.role, permissions: result });
+  } catch (error) {
+    console.error('Get permissions error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
-// Установить права участника
-router.put('/:projectId/members/:memberId/permissions', loadProjectMember, requireProjectRole('owner', 'admin'), (req: AuthRequest, res) => {
-  const { projectId, memberId } = req.params;
+// ============================================
+// УСТАНОВИТЬ ПРАВА УЧАСТНИКА
+// ============================================
+
+router.put('/:id/members/:memberId/permissions', loadProjectMember, requireProjectRole('owner', 'admin'), async (req: AuthRequest, res) => {
+  const { memberId } = req.params;
   const { permissions } = req.body;
 
-  // Проверяем, что участник существует и это не owner/admin
-  const memberResult = db.exec(
-    'SELECT * FROM project_members WHERE id = ? AND project_id = ?',
-    [memberId, projectId]
-  );
-  const member = rowsToObjects(memberResult)[0];
-
-  if (!member) {
-    return res.status(404).json({ error: 'Member not found' });
+  if (!Array.isArray(permissions)) {
+    return res.status(400).json({ error: 'Permissions array is required' });
   }
 
-  if (member.role === 'owner' || member.role === 'admin') {
-    return res.status(400).json({ error: 'Cannot set permissions for owner or admin' });
-  }
+  try {
+    const member = await ProjectMember.findById(memberId);
+    
+    if (!member) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
 
-  // Удаляем старые права
-  db.run('DELETE FROM permissions WHERE project_member_id = ?', [memberId]);
+    if (member.role === 'owner' || member.role === 'admin') {
+      return res.status(400).json({ error: 'Cannot set permissions for owner or admin' });
+    }
 
-  // Добавляем новые права
-  if (Array.isArray(permissions)) {
-    permissions.forEach((perm: any) => {
-      db.run(
-        'INSERT INTO permissions (project_member_id, status_id, can_read, can_create, can_edit, can_delete) VALUES (?, ?, ?, ?, ?, ?)',
-        [memberId, perm.status_id || null, perm.can_read ? 1 : 0, perm.can_create ? 1 : 0, perm.can_edit ? 1 : 0, perm.can_delete ? 1 : 0]
-      );
+    // Удаляем старые права
+    await Permission.deleteMany({ project_member_id: new mongoose.Types.ObjectId(memberId) });
+
+    // Создаём новые
+    const newPermissions = await Promise.all(
+      permissions.map(p => 
+        Permission.create({
+          project_member_id: new mongoose.Types.ObjectId(memberId),
+          status_id: p.status_id ? new mongoose.Types.ObjectId(p.status_id) : null,
+          can_read: p.can_read ?? true,
+          can_create: p.can_create ?? false,
+          can_edit: p.can_edit ?? false,
+          can_delete: p.can_delete ?? false
+        })
+      )
+    );
+
+    res.json({ 
+      message: 'Permissions updated',
+      permissions: newPermissions.map(p => ({
+        id: p._id,
+        project_member_id: p.project_member_id,
+        status_id: p.status_id,
+        can_read: p.can_read,
+        can_create: p.can_create,
+        can_edit: p.can_edit,
+        can_delete: p.can_delete
+      }))
     });
+  } catch (error) {
+    console.error('Set permissions error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
-
-  saveDb();
-
-  const result = db.exec(`
-    SELECT p.*, s.title as status_title
-    FROM permissions p
-    LEFT JOIN statuses s ON p.status_id = s.id
-    WHERE p.project_member_id = ?
-  `, [memberId]);
-
-  res.json(rowsToObjects(result));
-});
-
-// ============================================
-// ПРИГЛАШЕНИЯ В ПРОЕКТ
-// ============================================
-
-// Генерация случайного кода
-function generateInviteCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
-  let code = '';
-  for (let i = 0; i < 8; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return code;
-}
-
-// Получить все приглашения проекта
-router.get('/:projectId/invites', loadProjectMember, requireProjectRole('owner', 'admin'), (req: AuthRequest, res) => {
-  const { projectId } = req.params;
-
-  const result = db.exec(`
-    SELECT i.*, u.name as creator_name
-    FROM project_invites i
-    LEFT JOIN users u ON i.created_by = u.id
-    WHERE i.project_id = ?
-    ORDER BY i.created_at DESC
-  `, [projectId]);
-
-  res.json(rowsToObjects(result));
-});
-
-// Создать приглашение
-router.post('/:projectId/invites', loadProjectMember, requireProjectRole('owner', 'admin'), (req: AuthRequest, res) => {
-  const { projectId } = req.params;
-  const { role = 'member', max_uses, expires_in_hours } = req.body;
-  const userId = req.user!.id;
-
-  const validRoles = ['admin', 'member', 'viewer'];
-  if (!validRoles.includes(role)) {
-    return res.status(400).json({ error: 'Invalid role' });
-  }
-
-  // Admin не может создавать приглашения для admin
-  if (req.projectMember!.role === 'admin' && role === 'admin') {
-    return res.status(403).json({ error: 'Admin cannot create admin invites' });
-  }
-
-  const code = generateInviteCode();
-  const expiresAt = expires_in_hours 
-    ? new Date(Date.now() + expires_in_hours * 60 * 60 * 1000).toISOString()
-    : null;
-
-  db.run(
-    'INSERT INTO project_invites (project_id, code, role, max_uses, expires_at, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-    [projectId, code, role, max_uses || null, expiresAt, userId]
-  );
-  saveDb();
-
-  const result = db.exec('SELECT * FROM project_invites WHERE code = ?', [code]);
-  res.status(201).json(rowsToObjects(result)[0]);
-});
-
-// Удалить приглашение
-router.delete('/:projectId/invites/:inviteId', loadProjectMember, requireProjectRole('owner', 'admin'), (req: AuthRequest, res) => {
-  const { projectId, inviteId } = req.params;
-
-  db.run('DELETE FROM project_invites WHERE id = ? AND project_id = ?', [inviteId, projectId]);
-  saveDb();
-
-  res.status(204).send();
-});
-
-// Использовать приглашение (присоединиться к проекту)
-router.post('/join/:code', (req: AuthRequest, res) => {
-  const { code } = req.params;
-  const userId = req.user!.id;
-
-  // Находим приглашение
-  const inviteResult = db.exec(`
-    SELECT i.*, p.name as project_name
-    FROM project_invites i
-    INNER JOIN projects p ON i.project_id = p.id
-    WHERE i.code = ?
-  `, [code]);
-  const invite = rowsToObjects(inviteResult)[0];
-
-  if (!invite) {
-    return res.status(404).json({ error: 'Приглашение не найдено' });
-  }
-
-  // Проверяем срок действия
-  if (invite.expires_at && new Date(invite.expires_at) < new Date()) {
-    return res.status(400).json({ error: 'Срок действия приглашения истёк' });
-  }
-
-  // Проверяем лимит использований
-  if (invite.max_uses && invite.uses >= invite.max_uses) {
-    return res.status(400).json({ error: 'Лимит использований приглашения исчерпан' });
-  }
-
-  // Проверяем, не является ли пользователь уже участником
-  const existingMember = db.exec(
-    'SELECT id FROM project_members WHERE project_id = ? AND user_id = ?',
-    [invite.project_id, userId]
-  );
-  if (rowsToObjects(existingMember).length > 0) {
-    return res.status(400).json({ error: 'Вы уже являетесь участником этого проекта' });
-  }
-
-  // Добавляем пользователя в проект
-  db.run(
-    'INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, ?)',
-    [invite.project_id, userId, invite.role]
-  );
-
-  const memberResult = db.exec('SELECT last_insert_rowid() as id')[0];
-  const memberId = memberResult.values[0][0] as number;
-
-  // Создаём права по умолчанию
-  if (invite.role === 'viewer') {
-    db.run(
-      'INSERT INTO permissions (project_member_id, status_id, can_read, can_create, can_edit, can_delete) VALUES (?, NULL, 1, 0, 0, 0)',
-      [memberId]
-    );
-  } else if (invite.role === 'member') {
-    db.run(
-      'INSERT INTO permissions (project_member_id, status_id, can_read, can_create, can_edit, can_delete) VALUES (?, NULL, 1, 1, 1, 0)',
-      [memberId]
-    );
-  }
-
-  // Увеличиваем счётчик использований
-  db.run('UPDATE project_invites SET uses = uses + 1 WHERE id = ?', [invite.id]);
-  saveDb();
-
-  res.json({ 
-    message: 'Вы успешно присоединились к проекту',
-    project_id: invite.project_id,
-    project_name: invite.project_name,
-    role: invite.role
-  });
-});
-
-// Получить информацию о приглашении (без авторизации для превью)
-router.get('/invite-info/:code', (req, res) => {
-  const { code } = req.params;
-
-  const result = db.exec(`
-    SELECT i.role, i.expires_at, i.max_uses, i.uses, p.name as project_name, p.description as project_description
-    FROM project_invites i
-    INNER JOIN projects p ON i.project_id = p.id
-    WHERE i.code = ?
-  `, [code]);
-  const invite = rowsToObjects(result)[0];
-
-  if (!invite) {
-    return res.status(404).json({ error: 'Приглашение не найдено' });
-  }
-
-  // Проверяем валидность
-  const isExpired = invite.expires_at && new Date(invite.expires_at) < new Date();
-  const isExhausted = invite.max_uses && invite.uses >= invite.max_uses;
-
-  res.json({
-    project_name: invite.project_name,
-    project_description: invite.project_description,
-    role: invite.role,
-    is_valid: !isExpired && !isExhausted,
-    expires_at: invite.expires_at
-  });
 });
 
 export default router;

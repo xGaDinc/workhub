@@ -31,10 +31,10 @@ export default function ProjectSettings({ project, statuses, onClose, onUpdate }
     }
   };
 
-  const loadPermissions = async (memberId: number) => {
+  const loadPermissions = async (memberId: string) => {
     try {
       const { data } = await projectsApi.getMemberPermissions(project.id, memberId);
-      setPermissions(data);
+      setPermissions(data.permissions || []);
     } catch (error) {
       toast.error('Ошибка загрузки прав');
     }
@@ -62,7 +62,7 @@ export default function ProjectSettings({ project, statuses, onClose, onUpdate }
     }
   };
 
-  const handleUpdateRole = async (memberId: number, role: string) => {
+  const handleUpdateRole = async (memberId: string, role: string) => {
     try {
       await projectsApi.updateMember(project.id, memberId, { role });
       toast.success('Роль обновлена');
@@ -72,7 +72,7 @@ export default function ProjectSettings({ project, statuses, onClose, onUpdate }
     }
   };
 
-  const handleRemoveMember = async (memberId: number) => {
+  const handleRemoveMember = async (memberId: string) => {
     if (!confirm('Удалить участника из проекта?')) return;
     try {
       await projectsApi.removeMember(project.id, memberId);
@@ -100,7 +100,7 @@ export default function ProjectSettings({ project, statuses, onClose, onUpdate }
     }
   };
 
-  const updatePermission = (statusId: number | null, field: string, value: boolean) => {
+  const updatePermission = (statusId: string | null, field: string, value: boolean) => {
     setPermissions(prev => {
       const existing = prev.find(p => p.status_id === statusId);
       if (existing) {
@@ -111,7 +111,7 @@ export default function ProjectSettings({ project, statuses, onClose, onUpdate }
     });
   };
 
-  const getPermission = (statusId: number | null, field: string): boolean => {
+  const getPermission = (statusId: string | null, field: string): boolean => {
     const perm = permissions.find(p => p.status_id === statusId);
     return perm ? !!perm[field] : false;
   };

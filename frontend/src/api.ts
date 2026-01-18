@@ -38,9 +38,9 @@ export const auth = {
     api.get('/auth/me'),
   getUsers: () => 
     api.get('/auth/users'),
-  updateUser: (id: number, data: any) => 
+  updateUser: (id: string, data: any) => 
     api.patch(`/auth/users/${id}`, data),
-  deleteUser: (id: number) => 
+  deleteUser: (id: string) => 
     api.delete(`/auth/users/${id}`),
 };
 
@@ -51,31 +51,31 @@ export const auth = {
 export const projects = {
   getAll: () => 
     api.get('/projects'),
-  getOne: (id: number) => 
+  getOne: (id: string) => 
     api.get(`/projects/${id}`),
   create: (data: { name: string; description?: string }) => 
     api.post('/projects', data),
-  update: (id: number, data: { name?: string; description?: string }) => 
+  update: (id: string, data: { name?: string; description?: string }) => 
     api.patch(`/projects/${id}`, data),
-  delete: (id: number) => 
+  delete: (id: string) => 
     api.delete(`/projects/${id}`),
   
   // Members
-  getMembers: (projectId: number) => 
+  getMembers: (projectId: string) => 
     api.get(`/projects/${projectId}/members`),
-  addMember: (projectId: number, data: { user_id: number; role?: string }) => 
+  addMember: (projectId: string, data: { user_id: string; role?: string }) => 
     api.post(`/projects/${projectId}/members`, data),
-  createAndAddMember: (projectId: number, data: { email: string; name: string; password: string; role?: string }) => 
+  createAndAddMember: (projectId: string, data: { email: string; name: string; password: string; role?: string }) => 
     api.post(`/projects/${projectId}/members/create`, data),
-  updateMember: (projectId: number, memberId: number, data: { role: string }) => 
+  updateMember: (projectId: string, memberId: string, data: { role: string }) => 
     api.patch(`/projects/${projectId}/members/${memberId}`, data),
-  removeMember: (projectId: number, memberId: number) => 
+  removeMember: (projectId: string, memberId: string) => 
     api.delete(`/projects/${projectId}/members/${memberId}`),
   
   // Permissions
-  getMemberPermissions: (projectId: number, memberId: number) => 
+  getMemberPermissions: (projectId: string, memberId: string) => 
     api.get(`/projects/${projectId}/members/${memberId}/permissions`),
-  setMemberPermissions: (projectId: number, memberId: number, permissions: any[]) => 
+  setMemberPermissions: (projectId: string, memberId: string, permissions: any[]) => 
     api.put(`/projects/${projectId}/members/${memberId}/permissions`, { permissions }),
 };
 
@@ -84,16 +84,33 @@ export const projects = {
 // ============================================
 
 export const tasks = {
-  getAll: (projectId: number) => 
+  getAll: (projectId: string) => 
     api.get(`/tasks/project/${projectId}`),
-  create: (projectId: number, data: any) => 
+  create: (projectId: string, data: any) => 
     api.post(`/tasks/project/${projectId}`, data),
-  update: (taskId: number, data: any) => 
+  update: (taskId: string, data: any) => 
     api.patch(`/tasks/${taskId}`, data),
-  delete: (taskId: number) => 
+  delete: (taskId: string) => 
     api.delete(`/tasks/${taskId}`),
-  getUsers: (projectId: number) => 
+  getUsers: (projectId: string) => 
     api.get(`/tasks/project/${projectId}/users`),
+  uploadAttachment: (taskId: string, file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post(`/tasks/${taskId}/attachments`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+  },
+  deleteAttachment: (taskId: string, attachmentId: string) => 
+    api.delete(`/tasks/${taskId}/attachments/${attachmentId}`),
+  getComments: (taskId: string) =>
+    api.get(`/tasks/${taskId}/comments`),
+  createComment: (taskId: string, text: string) =>
+    api.post(`/tasks/${taskId}/comments`, { text }),
+  updateComment: (commentId: string, text: string) =>
+    api.patch(`/comments/${commentId}`, { text }),
+  deleteComment: (commentId: string) =>
+    api.delete(`/comments/${commentId}`),
 };
 
 // ============================================
@@ -101,16 +118,25 @@ export const tasks = {
 // ============================================
 
 export const statuses = {
-  getAll: (projectId: number) => 
+  getAll: (projectId: string) => 
     api.get(`/statuses/project/${projectId}`),
-  create: (projectId: number, data: any) => 
+  create: (projectId: string, data: any) => 
     api.post(`/statuses/project/${projectId}`, data),
-  update: (statusId: number, data: any) => 
+  update: (statusId: string, data: any) => 
     api.patch(`/statuses/${statusId}`, data),
-  delete: (statusId: number) => 
+  delete: (statusId: string) => 
     api.delete(`/statuses/${statusId}`),
-  reorder: (projectId: number, statusList: any[]) => 
+  reorder: (projectId: string, statusList: any[]) => 
     api.put(`/statuses/project/${projectId}/reorder`, { statuses: statusList }),
+};
+
+// ============================================
+// SEARCH
+// ============================================
+
+export const search = {
+  tasks: (query: string, projectId?: string) =>
+    api.get('/search', { params: { q: query, projectId } }),
 };
 
 export default api;

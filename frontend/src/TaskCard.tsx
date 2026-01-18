@@ -3,7 +3,7 @@ import { Task } from './types';
 
 interface TaskCardProps {
   task: Task;
-  onDelete: (id: number) => void;
+  onDelete: (id: string) => void;
   onEdit: (task: Task) => void;
   onView: (task: Task) => void;
   permissions: {
@@ -86,6 +86,12 @@ export default function TaskCard({ task, onDelete, onEdit, onView, permissions }
         }`}>
           {task.priority === 'high' ? '🔴' : task.priority === 'medium' ? '🟡' : '🟢'}
         </span>
+
+        {task.checklist && task.checklist.length > 0 && (
+          <span className="text-xs px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 flex items-center gap-1">
+            ✓ {task.checklist.filter(i => i.completed).length}/{task.checklist.length}
+          </span>
+        )}
 
         {task.assigned_name && (
           <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 flex items-center gap-1">

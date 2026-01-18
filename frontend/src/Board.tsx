@@ -2,9 +2,12 @@ import { useEffect, useState, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, horizontalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
-import { tasks as tasksApi, statuses as statusesApi } from './api';
+import { tasks as tasksApi, statuses as statusesApi, search as searchApi } from './api';
 import Column from './Column';
 import ProjectSettings from './ProjectSettings';
+import Checklist from './Checklist';
+import Attachments from './Attachments';
+import Comments from './Comments';
 import { User, Project, Task, Status, PRIORITY_LABELS, ROLE_LABELS } from './types';
 
 interface BoardProps {
@@ -40,7 +43,7 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
   const [statuses, setStatuses] = useState<Status[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
-  const [newTask, setNewTask] = useState({ title: '', description: '', priority: 'medium', assigned_to: '', due_date: '', status_id: '' });
+  const [newTask, setNewTask] = useState({ title: '', description: '', priority: 'medium', assigned_to: '', due_date: '', status_id: '', checklist: [] as { text: string; completed: boolean }[] });
   const [showColumnModal, setShowColumnModal] = useState(false);
   const [editingColumn, setEditingColumn] = useState<Status | null>(null);
   const [newColumn, setNewColumn] = useState({ title: '', color: '#475569', icon: '📌' });
@@ -54,6 +57,11 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
   const [sortBy, setSortBy] = useState<string>('created_at');
   const [showFilters, setShowFilters] = useState(false);
   const [showSort, setShowSort] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [showSearch, setShowSearch] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [showConfirmClose, setShowConfirmClose] = useState(false);
 
   // Анимированный фон
   const mousePosRef = useRef({ x: 0, y: 0 });
@@ -149,14 +157,14 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
     
     // Check if dragging a column (column ids start with 'column-')
     if (activeId.startsWith('column-')) {
-      const columnId = Number(activeId.replace('column-', ''));
+      const columnId = activeId.replace('column-', '');
       const column = statuses.find(s => s.id === columnId);
       if (column && canManageProject) {
         setActiveColumn(column);
       }
     } else {
       // Dragging a task
-      const task = tasks.find(t => t.id === Number(activeId));
+      const task = tasks.find(t => t.id === activeId);
       if (task) setActiveTask(task);
     }
   };
@@ -178,19 +186,19 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
 
     // Handle column reordering
     if (wasColumn && activeId.startsWith('column-')) {
-      const activeColumnId = Number(activeId.replace('column-', ''));
-      let overColumnId: number;
+      const activeColumnId = activeId.replace('column-', '');
+      let overColumnId: string;
       
-      // Over может быть либо column-X, либо просто числом (droppable зона)
+      // Over может быть либо column-X, либо просто ID (droppable зона)
       if (overId.startsWith('column-')) {
-        overColumnId = Number(overId.replace('column-', ''));
+        overColumnId = overId.replace('column-', '');
       } else {
-        overColumnId = Number(overId);
+        overColumnId = overId;
       }
       
       console.log('Column reorder:', { activeColumnId, overColumnId });
       
-      if (activeColumnId !== overColumnId && !isNaN(overColumnId)) {
+      if (activeColumnId !== overColumnId) {
         const oldIndex = statuses.findIndex(s => s.id === activeColumnId);
         const newIndex = statuses.findIndex(s => s.id === overColumnId);
         
@@ -213,18 +221,18 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
     }
 
     // Handle task moving
-    const taskId = Number(activeId);
-    let newStatusId: number;
+    const taskId = activeId;
+    let newStatusId: string;
     
     if (overId.startsWith('column-')) {
-      newStatusId = Number(overId.replace('column-', ''));
+      newStatusId = overId.replace('column-', '');
     } else {
-      newStatusId = Number(overId);
+      newStatusId = overId;
     }
     
     const task = tasks.find(t => t.id === taskId);
     
-    if (!task || task.status_id === newStatusId || isNaN(newStatusId)) return;
+    if (!task || task.status_id === newStatusId) return;
 
     const targetStatus = statuses.find(s => s.id === newStatusId);
     if (!targetStatus) return;
@@ -250,8 +258,8 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
     try {
       const taskData = {
         ...newTask,
-        assigned_to: newTask.assigned_to ? Number(newTask.assigned_to) : null,
-        status_id: newTask.status_id ? Number(newTask.status_id) : undefined,
+        assigned_to: newTask.assigned_to || null,
+        status_id: newTask.status_id || undefined,
       };
       if (editingTask) {
         await tasksApi.update(editingTask.id, taskData);
@@ -260,6 +268,7 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
         await tasksApi.create(project.id, taskData);
         toast.success('Задача создана');
       }
+      setHasUnsavedChanges(false);
       closeTaskModal();
       loadData();
     } catch (error: any) {
@@ -268,9 +277,22 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
   };
 
   const closeTaskModal = () => {
+    if (hasUnsavedChanges) {
+      setShowConfirmClose(true);
+      return;
+    }
     setShowModal(false);
     setEditingTask(null);
-    setNewTask({ title: '', description: '', priority: 'medium', assigned_to: '', due_date: '', status_id: '' });
+    setNewTask({ title: '', description: '', priority: 'medium', assigned_to: '', due_date: '', status_id: '', checklist: [] });
+    setHasUnsavedChanges(false);
+  };
+
+  const forceCloseModal = () => {
+    setShowModal(false);
+    setEditingTask(null);
+    setNewTask({ title: '', description: '', priority: 'medium', assigned_to: '', due_date: '', status_id: '', checklist: [] });
+    setHasUnsavedChanges(false);
+    setShowConfirmClose(false);
   };
 
   const handleEditTask = (task: Task) => {
@@ -279,14 +301,15 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
       title: task.title,
       description: task.description || '',
       priority: task.priority,
-      assigned_to: task.assigned_to?.toString() || '',
+      assigned_to: task.assigned_to || '',
       due_date: task.due_date ? task.due_date.split('T')[0] : '',
-      status_id: task.status_id.toString(),
+      status_id: task.status_id,
+      checklist: task.checklist || []
     });
     setShowModal(true);
   };
 
-  const handleDeleteTask = async (id: number) => {
+  const handleDeleteTask = async (id: string) => {
     try {
       await tasksApi.delete(id);
       toast.success('Задача удалена');
@@ -320,7 +343,7 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
     setShowColumnModal(true);
   };
 
-  const handleDeleteColumn = async (id: number) => {
+  const handleDeleteColumn = async (id: string) => {
     if (statuses.length <= 1) {
       toast.error('Должен остаться хотя бы один столбец');
       return;
@@ -334,12 +357,12 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
     }
   };
 
-  const getFilteredTasks = (statusId: number) => {
+  const getFilteredTasks = (statusId: string) => {
     let filtered = tasks.filter(t => t.status_id === statusId);
     if (filterPriority !== 'all') filtered = filtered.filter(t => t.priority === filterPriority);
     if (filterAssignee !== 'all') {
       if (filterAssignee === 'unassigned') filtered = filtered.filter(t => !t.assigned_to);
-      else filtered = filtered.filter(t => t.assigned_to === Number(filterAssignee));
+      else filtered = filtered.filter(t => t.assigned_to === filterAssignee);
     }
     filtered.sort((a, b) => {
       switch (sortBy) {
@@ -514,7 +537,11 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
       <div className="max-w-7xl mx-auto p-4 relative z-10">
         <div className="flex gap-3 mb-4">
           {canCreateAnyTask && (
-            <button onClick={() => setShowModal(true)} className="px-5 py-2.5 text-sm bg-gradient-to-r from-amber-500 to-yellow-600 text-slate-900 rounded-2xl font-bold hover:from-amber-600 hover:to-yellow-700 transition-all shadow-lg flex items-center gap-2">
+            <button onClick={() => {
+              const defaultStatus = statuses.find(s => s.permissions.can_create || canManageProject);
+              setNewTask({ title: '', description: '', priority: 'medium', assigned_to: '', due_date: '', status_id: defaultStatus?.id || '', checklist: [] });
+              setShowModal(true);
+            }} className="px-5 py-2.5 text-sm bg-gradient-to-r from-amber-500 to-yellow-600 text-slate-900 rounded-2xl font-bold hover:from-amber-600 hover:to-yellow-700 transition-all shadow-lg flex items-center gap-2">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
               Создать задачу
             </button>
@@ -531,7 +558,7 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
           <SortableContext items={statuses.map(s => `column-${s.id}`)} strategy={horizontalListSortingStrategy}>
             <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${statuses.length}, minmax(280px, 1fr))` }}>
               {statuses.map((status) => (
-                <Column key={status.id} status={status} tasks={getFilteredTasks(status.id)} onDelete={handleDeleteTask} onEdit={handleEditTask} onView={setViewingTask} onEditColumn={handleEditColumn} onDeleteColumn={handleDeleteColumn} canManage={canManageProject} isDragging={activeColumn?.id === status.id} />
+                <Column key={status.id} status={status} tasks={getFilteredTasks(status.id)} onDelete={handleDeleteTask} onEdit={handleEditTask} onView={handleEditTask} onEditColumn={handleEditColumn} onDeleteColumn={handleDeleteColumn} canManage={canManageProject} isDragging={activeColumn?.id === status.id} />
               ))}
             </div>
           </SortableContext>
@@ -564,31 +591,73 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
 
       {/* Task Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={closeTaskModal}>
-          <div className="bg-slate-900/95 border border-white/10 p-5 rounded-2xl w-[420px] shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-bold text-white mb-4">{editingTask ? 'Редактировать' : 'Новая задача'}</h2>
-            <form onSubmit={handleCreateTask} className="space-y-3">
-              <input type="text" value={newTask.title} onChange={(e) => setNewTask({ ...newTask, title: e.target.value })} className="w-full px-4 py-2.5 bg-slate-800 border border-white/10 rounded-xl text-white placeholder-amber-200/30" placeholder="Название задачи" required autoFocus />
-              <textarea value={newTask.description} onChange={(e) => setNewTask({ ...newTask, description: e.target.value })} className="w-full px-4 py-2.5 bg-slate-800 border border-white/10 rounded-xl text-white placeholder-amber-200/30 resize-none" placeholder="Описание" rows={3} />
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={closeTaskModal}>
+          <div className="bg-slate-900/95 border border-white/10 p-6 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-xl font-bold text-white mb-5">{editingTask ? 'Редактировать задачу' : 'Новая задача'}</h2>
+            <form onSubmit={handleCreateTask} className="space-y-4">
+              <input type="text" value={newTask.title} onChange={(e) => { setNewTask({ ...newTask, title: e.target.value }); setHasUnsavedChanges(true); }} className="w-full px-4 py-3 bg-slate-800 border border-white/10 rounded-xl text-white placeholder-amber-200/30" placeholder="Название задачи" required autoFocus />
+              <textarea value={newTask.description} onChange={(e) => { setNewTask({ ...newTask, description: e.target.value }); setHasUnsavedChanges(true); }} className="w-full px-4 py-3 bg-slate-800 border border-white/10 rounded-xl text-white placeholder-amber-200/30 resize-none" placeholder="Описание" rows={3} />
+              
               <div className="grid grid-cols-2 gap-3">
-                <select value={newTask.priority} onChange={(e) => setNewTask({ ...newTask, priority: e.target.value })} className="px-4 py-2.5 bg-slate-800 border border-white/10 rounded-xl text-amber-100">
-                  <option value="low">🟢 Низкий</option>
-                  <option value="medium">🟡 Средний</option>
-                  <option value="high">🔴 Высокий</option>
-                </select>
-                <select value={newTask.status_id} onChange={(e) => setNewTask({ ...newTask, status_id: e.target.value })} className="px-4 py-2.5 bg-slate-800 border border-white/10 rounded-xl text-amber-100">
-                  <option value="">Статус по умолчанию</option>
-                  {statuses.filter(s => s.permissions.can_create || canManageProject).map(s => (<option key={s.id} value={s.id}>{s.icon} {s.title}</option>))}
-                </select>
+                <div>
+                  <label className="text-xs text-amber-200/60 mb-1 block">Приоритет</label>
+                  <select value={newTask.priority} onChange={(e) => setNewTask({ ...newTask, priority: e.target.value })} className="w-full px-4 py-2.5 bg-slate-800 border border-white/10 rounded-xl text-amber-100">
+                    <option value="low">🟢 Низкий</option>
+                    <option value="medium">🟡 Средний</option>
+                    <option value="high">🔴 Высокий</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-amber-200/60 mb-1 block">Статус</label>
+                  <select value={newTask.status_id} onChange={(e) => setNewTask({ ...newTask, status_id: e.target.value })} className="w-full px-4 py-2.5 bg-slate-800 border border-white/10 rounded-xl text-amber-100">
+                    {statuses.filter(s => s.permissions.can_create || canManageProject).map(s => (<option key={s.id} value={s.id}>{s.icon} {s.title}</option>))}
+                  </select>
+                </div>
               </div>
-              <select value={newTask.assigned_to} onChange={(e) => setNewTask({ ...newTask, assigned_to: e.target.value })} className="w-full px-4 py-2.5 bg-slate-800 border border-white/10 rounded-xl text-amber-100">
-                <option value="">Не назначено</option>
-                {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-              </select>
-              <input type="date" value={newTask.due_date} onChange={(e) => setNewTask({ ...newTask, due_date: e.target.value })} className="w-full px-4 py-2.5 bg-slate-800 border border-white/10 rounded-xl text-amber-100" />
-              <div className="flex gap-3 pt-2">
-                <button type="button" onClick={closeTaskModal} className="flex-1 px-4 py-2.5 bg-white/5 text-amber-200 rounded-xl hover:bg-white/10">Отмена</button>
-                <button type="submit" className="flex-1 px-4 py-2.5 bg-gradient-to-r from-amber-500 to-yellow-600 text-slate-900 rounded-xl font-bold">{editingTask ? 'Сохранить' : 'Создать'}</button>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-amber-200/60 mb-1 block">Исполнитель</label>
+                  <select value={newTask.assigned_to} onChange={(e) => setNewTask({ ...newTask, assigned_to: e.target.value })} className="w-full px-4 py-2.5 bg-slate-800 border border-white/10 rounded-xl text-amber-100">
+                    <option value="">Не назначено</option>
+                    {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-amber-200/60 mb-1 block">Дедлайн</label>
+                  <input type="date" value={newTask.due_date} onChange={(e) => setNewTask({ ...newTask, due_date: e.target.value })} className="w-full px-4 py-2.5 bg-slate-800 border border-white/10 rounded-xl text-amber-100" />
+                </div>
+              </div>
+              
+              <div className="border-t border-white/10 pt-4">
+                <Checklist 
+                  items={newTask.checklist} 
+                  onChange={(checklist) => { setNewTask({ ...newTask, checklist }); setHasUnsavedChanges(true); }} 
+                />
+              </div>
+
+              {editingTask && (
+                <>
+                  <div className="border-t border-white/10 pt-4">
+                    <Attachments 
+                      taskId={editingTask.id}
+                      attachments={editingTask.attachments || []}
+                      onUpdate={loadData}
+                    />
+                  </div>
+
+                  <div className="border-t border-white/10 pt-4">
+                    <Comments 
+                      taskId={editingTask.id}
+                      currentUserId={user.id}
+                    />
+                  </div>
+                </>
+              )}
+
+              <div className="flex gap-3 pt-4 border-t border-white/10">
+                <button type="button" onClick={closeTaskModal} className="flex-1 px-4 py-3 bg-white/5 text-amber-200 rounded-xl hover:bg-white/10 transition-all">Отмена</button>
+                <button type="submit" className="flex-1 px-4 py-3 bg-gradient-to-r from-amber-500 to-yellow-600 text-slate-900 rounded-xl font-bold hover:from-amber-600 hover:to-yellow-700 transition-all">{editingTask ? 'Сохранить' : 'Создать'}</button>
               </div>
             </form>
           </div>
@@ -653,26 +722,24 @@ export default function Board({ user, project, onLogout, onBack }: BoardProps) {
         </div>
       )}
 
-      {/* View Task Modal */}
-      {viewingTask && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setViewingTask(null)}>
-          <div className="bg-slate-900/95 border border-white/10 p-6 rounded-2xl w-[480px] shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex justify-between items-start mb-4">
-              <h2 className="text-xl font-bold text-white">{viewingTask.title}</h2>
-              <button onClick={() => setViewingTask(null)} className="text-amber-200/60 hover:text-white">✕</button>
-            </div>
-            {viewingTask.description && <p className="text-amber-200/80 mb-4">{viewingTask.description}</p>}
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between"><span className="text-amber-200/60">Приоритет:</span><span className="text-white">{PRIORITY_LABELS[viewingTask.priority]}</span></div>
-              <div className="flex justify-between"><span className="text-amber-200/60">Исполнитель:</span><span className="text-white">{viewingTask.assigned_name || 'Не назначен'}</span></div>
-              <div className="flex justify-between"><span className="text-amber-200/60">Создал:</span><span className="text-white">{viewingTask.creator_name}</span></div>
-              {viewingTask.due_date && <div className="flex justify-between"><span className="text-amber-200/60">Дедлайн:</span><span className="text-white">{new Date(viewingTask.due_date).toLocaleDateString()}</span></div>}
+      {showSettings && <ProjectSettings project={project} onClose={() => setShowSettings(false)} statuses={statuses} onUpdate={loadData} />}
+
+      {showConfirmClose && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60]">
+          <div className="bg-slate-900 border border-white/10 rounded-2xl p-6 max-w-md">
+            <h3 className="text-lg font-bold text-white mb-2">Несохраненные изменения</h3>
+            <p className="text-amber-200/80 mb-4">У вас есть несохраненные изменения. Закрыть без сохранения?</p>
+            <div className="flex gap-3">
+              <button onClick={() => setShowConfirmClose(false)} className="flex-1 px-4 py-2 bg-white/5 text-amber-200 rounded-xl hover:bg-white/10">
+                Отмена
+              </button>
+              <button onClick={forceCloseModal} className="flex-1 px-4 py-2 bg-red-500 text-white rounded-xl hover:bg-red-600">
+                Закрыть без сохранения
+              </button>
             </div>
           </div>
         </div>
       )}
-
-      {showSettings && <ProjectSettings project={project} onClose={() => setShowSettings(false)} statuses={statuses} onUpdate={loadData} />}
     </div>
   );
 }
