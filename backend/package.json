@@ -16,6 +16,7 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^9.1.4",
     "multer": "^2.0.2",
+    "puregram": "^2.26.8",
     "sql.js": "^1.10.3"
   },
   "devDependencies": {

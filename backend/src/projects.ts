@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { Project, ProjectMember, Status, Task, Permission, User } from './db.js';
 import { authMiddleware, AuthRequest, loadProjectMember, requireProjectRole } from './middleware.js';
 import mongoose from 'mongoose';
+import { startBotPolling } from './telegram.js';
 
 const router = express.Router();
 
@@ -271,12 +272,13 @@ router.get('/:id', loadProjectMember, async (req: AuthRequest, res) => {
 
 router.patch('/:id', loadProjectMember, requireProjectRole('owner', 'admin'), async (req: AuthRequest, res) => {
   const { id } = req.params;
-  const { name, description } = req.body;
+  const { name, description, telegram_bot_token } = req.body;
 
   try {
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
     if (description !== undefined) updateData.description = description;
+    if (telegram_bot_token !== undefined) updateData.telegram_bot_token = telegram_bot_token;
 
     const project = await Project.findByIdAndUpdate(id, updateData, { new: true });
     
@@ -284,10 +286,15 @@ router.patch('/:id', loadProjectMember, requireProjectRole('owner', 'admin'), as
       return res.status(404).json({ error: 'Project not found' });
     }
 
+    if (telegram_bot_token) {
+      startBotPolling(telegram_bot_token);
+    }
+
     res.json({
       id: project._id,
       name: project.name,
       description: project.description,
+      telegram_bot_token: project.telegram_bot_token,
       created_by: project.created_by
     });
   } catch (error) {

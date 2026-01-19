@@ -36,6 +36,8 @@ export const auth = {
     api.post('/auth/register', { email, password, name }),
   me: () => 
     api.get('/auth/me'),
+  updateMe: (data: { name?: string; telegram_id?: string }) =>
+    api.patch('/auth/me', data),
   getUsers: () => 
     api.get('/auth/users'),
   updateUser: (id: string, data: any) => 

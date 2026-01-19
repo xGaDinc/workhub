@@ -108,10 +108,42 @@ router.get('/me', authMiddleware, async (req: AuthRequest, res) => {
       id: user._id,
       email: user.email,
       name: user.name,
-      is_admin: user.is_admin
+      is_admin: user.is_admin,
+      telegram_id: user.telegram_id
     });
   } catch (error) {
     console.error('Get me error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ============================================
+// ОБНОВИТЬ СВОЙ ПРОФИЛЬ
+// ============================================
+
+router.patch('/me', authMiddleware, async (req: AuthRequest, res) => {
+  const { name, telegram_id } = req.body;
+
+  try {
+    const updateData: any = {};
+    if (name !== undefined) updateData.name = name;
+    if (telegram_id !== undefined) updateData.telegram_id = telegram_id;
+
+    const user = await User.findByIdAndUpdate(req.user!.id, updateData, { new: true }).select('-password');
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      id: user._id,
+      email: user.email,
+      name: user.name,
+      is_admin: user.is_admin,
+      telegram_id: user.telegram_id
+    });
+  } catch (error) {
+    console.error('Update me error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });

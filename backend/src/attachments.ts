@@ -52,7 +52,7 @@ router.post('/:id/attachments', authMiddleware, upload.single('file'), async (re
 
     const attachment = {
       filename: req.file.filename,
-      original_name: req.file.originalname,
+      original_name: Buffer.from(req.file.originalname, 'latin1').toString('utf8'),
       mimetype: req.file.mimetype,
       size: req.file.size,
       url: `/uploads/${req.file.filename}`,

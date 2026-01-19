@@ -11,12 +11,13 @@ interface ProjectSettingsProps {
 }
 
 export default function ProjectSettings({ project, statuses, onClose, onUpdate }: ProjectSettingsProps) {
-  const [tab, setTab] = useState<'members' | 'permissions'>('members');
+  const [tab, setTab] = useState<'members' | 'permissions' | 'notifications'>('members');
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [selectedMember, setSelectedMember] = useState<ProjectMember | null>(null);
   const [permissions, setPermissions] = useState<any[]>([]);
   const [showAddMember, setShowAddMember] = useState(false);
   const [newMember, setNewMember] = useState({ email: '', name: '', password: '', role: 'member' });
+  const [telegramToken, setTelegramToken] = useState(project.telegram_bot_token || '');
 
   useEffect(() => {
     loadMembers();
@@ -117,30 +118,69 @@ export default function ProjectSettings({ project, statuses, onClose, onUpdate }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-slate-900/95 border border-white/10 rounded-2xl w-[600px] max-h-[80vh] shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end md:items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-slate-900/95 border border-white/10 rounded-t-2xl md:rounded-2xl w-full md:w-[600px] max-h-[90vh] md:max-h-[80vh] shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div className="p-5 border-b border-white/10">
+        <div className="p-4 md:p-5 border-b border-white/10">
           <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold text-white">Настройки проекта</h2>
+            <h2 className="text-lg md:text-xl font-bold text-white">Настройки проекта</h2>
             <button onClick={onClose} className="text-amber-200/60 hover:text-white text-xl">✕</button>
           </div>
-          <div className="flex gap-2 mt-4">
+          <div className="flex gap-2 mt-4 overflow-x-auto">
             <button onClick={() => { setTab('members'); setSelectedMember(null); }}
-              className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${tab === 'members' ? 'bg-amber-500/20 text-amber-400' : 'text-amber-200/60 hover:bg-white/5'}`}>
+              className={`px-4 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${tab === 'members' ? 'bg-amber-500/20 text-amber-400' : 'text-amber-200/60 hover:bg-white/5'}`}>
               Участники
             </button>
             {selectedMember && selectedMember.role !== 'owner' && selectedMember.role !== 'admin' && (
               <button onClick={() => setTab('permissions')}
-                className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${tab === 'permissions' ? 'bg-amber-500/20 text-amber-400' : 'text-amber-200/60 hover:bg-white/5'}`}>
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${tab === 'permissions' ? 'bg-amber-500/20 text-amber-400' : 'text-amber-200/60 hover:bg-white/5'}`}>
                 Права: {selectedMember.name}
               </button>
             )}
+            <button onClick={() => setTab('notifications')}
+              className={`px-4 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${tab === 'notifications' ? 'bg-amber-500/20 text-amber-400' : 'text-amber-200/60 hover:bg-white/5'}`}>
+              🔔 Уведомления
+            </button>
           </div>
         </div>
 
         {/* Content */}
-        <div className="p-5 overflow-y-auto max-h-[60vh]">
+        <div className="p-4 md:p-5 overflow-y-auto max-h-[70vh] md:max-h-[60vh]">
+          {tab === 'notifications' && (
+            <div className="space-y-4">
+              <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+                <p className="text-sm text-amber-200">
+                  Укажите токен Telegram бота для отправки уведомлений участникам при назначении задач и смене статусов.
+                </p>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-amber-400 mb-2 uppercase tracking-wider">Токен бота</label>
+                <input
+                  type="text"
+                  value={telegramToken}
+                  onChange={(e) => setTelegramToken(e.target.value)}
+                  placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+                  className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/30 focus:border-amber-400 transition-all"
+                />
+                <p className="text-xs text-amber-200/50 mt-2">Получите токен у @BotFather в Telegram</p>
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    await projectsApi.update(project.id, { telegram_bot_token: telegramToken });
+                    toast.success('Токен сохранён');
+                    onUpdate();
+                  } catch (error) {
+                    toast.error('Ошибка сохранения');
+                  }
+                }}
+                className="w-full px-4 py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-bold hover:from-amber-400 hover:to-orange-400 transition-all"
+              >
+                Сохранить
+              </button>
+            </div>
+          )}
+
           {tab === 'members' && (
             <div className="space-y-3">
               {/* Add Member Button */}

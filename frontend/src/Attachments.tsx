@@ -11,6 +11,7 @@ interface AttachmentsProps {
 
 export default function Attachments({ taskId, attachments, onUpdate }: AttachmentsProps) {
   const [uploading, setUploading] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
 
   const handleUpload = async (file: File) => {
     setUploading(true);
@@ -62,7 +63,16 @@ export default function Attachments({ taskId, attachments, onUpdate }: Attachmen
         <div className="space-y-2">
           {attachments.map((att) => (
             <div key={att._id} className="flex items-center gap-2 p-2 bg-slate-800 rounded-lg group">
-              <span className="text-xl">{getFileIcon(att.mimetype)}</span>
+              {att.mimetype.startsWith('image/') ? (
+                <img 
+                  src={`http://localhost:3000${att.url}`} 
+                  alt={att.original_name}
+                  className="w-12 h-12 object-cover rounded cursor-pointer hover:opacity-80"
+                  onClick={() => setPreview(`http://localhost:3000${att.url}`)}
+                />
+              ) : (
+                <span className="text-xl">{getFileIcon(att.mimetype)}</span>
+              )}
               <div className="flex-1 min-w-0">
                 <a 
                   href={`http://localhost:3000${att.url}`} 
@@ -123,6 +133,26 @@ export default function Attachments({ taskId, attachments, onUpdate }: Attachmen
             )}
           </label>
         </div>
+
+      {preview && (
+        <div 
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => setPreview(null)}
+        >
+          <img 
+            src={preview} 
+            alt="Preview" 
+            className="max-w-full max-h-full object-contain rounded-lg"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button 
+            onClick={() => setPreview(null)}
+            className="absolute top-4 right-4 w-10 h-10 bg-white/10 hover:bg-white/20 rounded-full text-white text-xl"
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   );
 }

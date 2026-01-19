@@ -1,7 +1,8 @@
 import express from 'express';
-import { Task, Status, User, ProjectMember, Permission } from './db.js';
+import { Task, Status, User, ProjectMember, Permission, Project } from './db.js';
 import { authMiddleware, AuthRequest, loadProjectMember, checkPermission } from './middleware.js';
 import mongoose from 'mongoose';
+import { notifyTaskAssigned, notifyTaskStatusChanged } from './telegram.js';
 
 const router = express.Router();
 
@@ -150,10 +151,24 @@ router.patch('/:id', authMiddleware, async (req: AuthRequest, res) => {
     if (checklist !== undefined) updateData.checklist = checklist;
     if (attachments !== undefined) updateData.attachments = attachments;
 
+    const oldTask = await Task.findById(id);
     const updated = await Task.findByIdAndUpdate(id, updateData, { new: true });
     const status = await Status.findById(updated!.status_id);
     const creator = await User.findById(updated!.created_by);
     const assignee = updated!.assigned_to ? await User.findById(updated!.assigned_to) : null;
+    const project = await Project.findById(updated!.project_id);
+
+    // Уведомление при назначении исполнителя
+    if (assigned_to && oldTask?.assigned_to?.toString() !== assigned_to && assignee?.telegram_id && project?.telegram_bot_token) {
+      const assigner = await User.findById(req.user!.id);
+      notifyTaskAssigned(project.telegram_bot_token, assignee.telegram_id, updated!.title, project.name, assigner?.name || 'Неизвестно');
+    }
+
+    // Уведомление при смене статуса
+    if (status_id && oldTask?.status_id?.toString() !== status_id && assignee?.telegram_id && project?.telegram_bot_token) {
+      const oldStatus = await Status.findById(oldTask?.status_id);
+      notifyTaskStatusChanged(project.telegram_bot_token, assignee.telegram_id, updated!.title, project.name, `${oldStatus?.icon || ''} ${oldStatus?.title || ''}`, `${status?.icon || ''} ${status?.title || ''}`);
+    }
 
     res.json({
       id: updated!._id,

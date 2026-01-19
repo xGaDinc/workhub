@@ -3,12 +3,14 @@ export interface User {
   email: string;
   name: string;
   is_admin: boolean;
+  telegram_id?: string;
 }
 
 export interface Project {
   id: string;
   name: string;
   description: string | null;
+  telegram_bot_token?: string;
   created_by: string;
   creator_name: string;
   created_at: string;

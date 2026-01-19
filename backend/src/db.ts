@@ -18,12 +18,14 @@ export interface IUser extends Document {
   password: string;
   name: string;
   is_admin: boolean;
+  telegram_id?: string;
   created_at: Date;
 }
 
 export interface IProject extends Document {
   name: string;
   description?: string;
+  telegram_bot_token?: string;
   created_by: mongoose.Types.ObjectId;
   created_at: Date;
 }
@@ -100,12 +102,14 @@ const UserSchema = new Schema<IUser>({
   password: { type: String, required: true },
   name: { type: String, required: true },
   is_admin: { type: Boolean, default: false },
+  telegram_id: { type: String },
   created_at: { type: Date, default: Date.now }
 });
 
 const ProjectSchema = new Schema<IProject>({
   name: { type: String, required: true },
   description: String,
+  telegram_bot_token: { type: String },
   created_by: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   created_at: { type: Date, default: Date.now }
 });
